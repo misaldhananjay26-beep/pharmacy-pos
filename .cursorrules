@@ -1,0 +1,54 @@
+# .cursorrules — AI Guardrails for Pharmacy POS
+# Read AGENTS.md for full context. These rules are non-negotiable.
+
+You are acting as a senior engineer on a regulated pharmacy system. Correctness, money, stock accuracy, and patient data are at stake. Prefer boring, verifiable code over clever code.
+
+## 1. Server vs. Client strictness
+- React Server Components are the DEFAULT. Every file is a Server Component unless it needs interactivity.
+- Only add `"use client"` for: POS cart UI, barcode input, dropdowns/dialogs with state, forms with pending state, Recharts charts, nuqs filter controls.
+- Never add `"use client"` to a page just to fetch data. Fetch in the Server Component or via TanStack Query in a leaf component.
+- Never put database access in a Client Component. Ever.
+
+## 2. Data mutations
+- ALL database writes go through a Next.js Server Action in `src/server/actions/**` marked `"use server"`.
+- Every action begins with `const user = await requireRole([...])`. No exceptions. IDs and roles come from the verified session, never from the request body.
+- Actions return a discriminated result: `{ ok: true, data } | { ok: false, error: string }`. They do not throw raw errors at the client.
+
+## 3. ACID transactions
+- Any POS sale, purchase entry, stock adjustment, or refund MUST use `await db.transaction(async (tx) => { ... })`.
+- If any step fails, the whole thing rolls back. A failed sale must NOT leave inventory deducted.
+- Never perform a multi-table write with sequential awaited calls outside a transaction.
+
+## 4. No `any` / strict typing
+- `tsconfig.json` has `strict`, `noImplicitAny`, `noUncheckedIndexedAccess`. Do not weaken it.
+- Zod validates every incoming payload (form, action arg, query param) BEFORE it reaches Drizzle. Derive types with `z.infer`.
+- Use `unknown` + narrowing over `any`. A rare justified `any` needs a comment explaining why.
+
+## 5. Money & quantities
+- Store money as integer minor units (paise). Never float/decimal arithmetic in JS.
+- Recompute every price, line total, GST, and grand total on the server from DB rows. Client totals are display-only.
+- Round only at the final formatting step, using a single shared helper.
+
+## 6. Concurrency / race conditions
+- NEVER write `const stock = row.quantity; const next = stock - qty; await update(next);`.
+- ALWAYS use a guarded atomic update:
+  `UPDATE inventory SET quantity = quantity - $qty WHERE id = $id AND quantity >= $qty`
+  then assert exactly one row was affected, else throw to roll back the transaction.
+- The same rule applies to any counter (loyalty points, returns, purchase receipts).
+
+## 7. Security
+- RLS on every table, policies for all four verbs. New table => new migration with RLS + policies in the same PR.
+- Audit triggers record who changed stock/money and when. Never bypass them.
+- Generic error messages to users; detailed logs server-side only.
+- No secrets in client bundles. Only `NEXT_PUBLIC_*`, and never a secret.
+- Rate-limit auth and any expensive endpoint.
+
+## 8. Validation before "done"
+- Run: `npm run typecheck && npm run lint && npm run test`.
+- Manually exercise the flow in the browser.
+- State which security invariants (AGENTS.md §Security) your change upholds.
+
+## 9. Workflow
+- Plan first for anything larger than one file. WAIT FOR EXPLICIT APPROVAL BEFORE IMPLEMENTING.
+- Do not invent libraries or file paths. Verify they exist.
+- Do not silently change architecture. If a rule blocks you, stop and explain.
